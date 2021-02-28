@@ -25,9 +25,9 @@ using System.Threading.Tasks;
 using System.Web;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
+using ErrorEventArgs = Newtonsoft.Json.Serialization.ErrorEventArgs;
 using RestSharp;
 using RestSharp.Deserializers;
-using ErrorEventArgs = Newtonsoft.Json.Serialization.ErrorEventArgs;
 using RestSharpMethod = RestSharp.Method;
 using Polly;
 
@@ -36,7 +36,7 @@ namespace Org.OpenAPITools.Client
     /// <summary>
     /// Allows RestSharp to Serialize/Deserialize JSON using our custom logic, but only when ContentType is JSON.
     /// </summary>
-    internal class CustomJsonCodec : RestSharp.Serializers.ISerializer, RestSharp.Deserializers.IDeserializer
+    internal class CustomJsonCodec  : RestSharp.Serializers.ISerializer, RestSharp.Deserializers.IDeserializer 
     {
         private readonly IReadableConfiguration _configuration;
         private static readonly string _contentType = "application/json";
@@ -97,6 +97,7 @@ namespace Org.OpenAPITools.Client
         internal object Deserialize(IRestResponse response, Type type)
         {
             IList<Parameter> headers = response.Headers;
+
             if (type == typeof(byte[])) // return byte array
             {
                 return response.RawBytes;
@@ -105,6 +106,7 @@ namespace Org.OpenAPITools.Client
             // TODO: ? if (type.IsAssignableFrom(typeof(Stream)))
             if (type == typeof(Stream))
             {
+                var bytes = response.RawBytes;
                 if (headers != null)
                 {
                     var filePath = String.IsNullOrEmpty(_configuration.TempFolderPath)
@@ -117,12 +119,12 @@ namespace Org.OpenAPITools.Client
                         if (match.Success)
                         {
                             string fileName = filePath + ClientUtils.SanitizeFilename(match.Groups[1].Value.Replace("\"", "").Replace("'", ""));
-                            File.WriteAllBytes(fileName, response.RawBytes);
+                            File.WriteAllBytes(fileName, bytes);
                             return new FileStream(fileName, FileMode.Open);
                         }
                     }
                 }
-                var stream = new MemoryStream(response.RawBytes);
+                var stream = new MemoryStream(bytes);
                 return stream;
             }
 
@@ -165,6 +167,22 @@ namespace Org.OpenAPITools.Client
     {
         private readonly String _baseUrl;
 
+        /// <summary>
+        /// Specifies the settings on a <see cref="JsonSerializer" /> object. 
+        /// These settings can be adjusted to accomodate custom serialization rules.
+        /// </summary>
+        public JsonSerializerSettings SerializerSettings { get; set; } = new JsonSerializerSettings
+        {
+            // OpenAPI generated types generally hide default constructors.
+            ConstructorHandling = ConstructorHandling.AllowNonPublicDefaultConstructor,
+            ContractResolver = new DefaultContractResolver
+            {
+                NamingStrategy = new CamelCaseNamingStrategy
+                {
+                    OverrideSpecifiedNames = false
+                }
+            }
+        };
         /// <summary>
         /// Allows for extending request processing for <see cref="ApiClient"/> generated code.
         /// </summary>
@@ -263,7 +281,7 @@ namespace Org.OpenAPITools.Client
             RestRequest request = new RestRequest(Method(method))
             {
                 Resource = path,
-                JsonSerializer = new CustomJsonCodec(configuration)
+                JsonSerializer = new CustomJsonCodec(SerializerSettings, configuration)
             };
 
             if (options.PathParameters != null)
@@ -411,7 +429,7 @@ namespace Org.OpenAPITools.Client
             }
             else
             {
-                var customDeserializer = new CustomJsonCodec(configuration);
+                var customDeserializer = new CustomJsonCodec(SerializerSettings, configuration);
                 client.AddHandler("application/json", () => customDeserializer);
                 client.AddHandler("text/json", () => customDeserializer);
                 client.AddHandler("text/x-json", () => customDeserializer);
@@ -460,6 +478,19 @@ namespace Org.OpenAPITools.Client
                 response = client.Execute<T>(req);
             }
 
+            // if the response type is oneOf/anyOf, call FromJSON to deserialize the data
+            if (typeof(Org.OpenAPITools.Model.AbstractOpenAPISchema).IsAssignableFrom(typeof(T)))
+            {
+                T instance = (T)Activator.CreateInstance(typeof(T));
+                MethodInfo method = typeof(T).GetMethod("FromJson");
+                method.Invoke(instance, new object[] { response.Content });
+                response.Data = instance;
+            }
+            else if (typeof(T).Name == "Stream") // for binary response
+            {
+                response.Data = (T)(object)new MemoryStream(response.RawBytes);
+            }
+
             InterceptResponse(req, response);
 
             var result = ToApiResponse(response);
@@ -497,6 +528,9 @@ namespace Org.OpenAPITools.Client
             return result;
         }
 
+
+
+
         private async Task<ApiResponse<T>> ExecAsync<T>(RestRequest req, IReadableConfiguration configuration, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
         {
             RestClient client = new RestClient(_baseUrl);
@@ -513,7 +547,7 @@ namespace Org.OpenAPITools.Client
             }
             else
             {
-                var customDeserializer = new CustomJsonCodec(configuration);
+                var customDeserializer = new CustomJsonCodec(SerializerSettings, configuration);
                 client.AddHandler("application/json", () => customDeserializer);
                 client.AddHandler("text/json", () => customDeserializer);
                 client.AddHandler("text/x-json", () => customDeserializer);
@@ -569,6 +603,10 @@ namespace Org.OpenAPITools.Client
                 MethodInfo method = typeof(T).GetMethod("FromJson");
                 method.Invoke(instance, new object[] { response.Content });
                 response.Data = instance;
+            }
+            else if (typeof(T).Name == "Stream") // for binary response
+            {
+                response.Data = (T)(object)new MemoryStream(response.RawBytes);
             }
 
             InterceptResponse(req, response);

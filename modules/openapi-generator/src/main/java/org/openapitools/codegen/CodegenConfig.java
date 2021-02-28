@@ -188,6 +188,8 @@ public interface CodegenConfig {
 
     Map<String, Object> updateAllModels(Map<String, Object> objs);
 
+    void postProcess();
+
     Map<String, Object> postProcessAllModels(Map<String, Object> objs);
 
     Map<String, Object> postProcessModels(Map<String, Object> objs);
@@ -220,6 +222,10 @@ public interface CodegenConfig {
     boolean isRemoveOperationIdPrefix();
 
     void setRemoveOperationIdPrefix(boolean removeOperationIdPrefix);
+
+    boolean isSkipOperationExample();
+
+    void setSkipOperationExample(boolean skipOperationExample);
 
     public boolean isHideGenerationTimestamp();
 
